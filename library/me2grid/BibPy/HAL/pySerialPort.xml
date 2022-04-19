@@ -1,0 +1,3 @@
+<SerialPortConfiguration>
+    <pySerialPort port="COM3" />
+</SerialPortConfiguration>
