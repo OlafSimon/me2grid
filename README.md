@@ -1,18 +1,19 @@
 # me2grid
 Energy management for connecting your home to the electrical grid
 
-## Library usage
-To use the Python 'me2grid' library create a working folder on your computer. The library itself consists of the folder 'me2grid' which is placed inside the 'library' folder. Copy the complete folder 'me2grid' to your working folder.
-
-The folder 'library' also contains sample files which you can copy also, if you like.
-
 ## Library content
 The 'me2grid' library consists of several sub libraries. These are organized in different sub folders inside the main library folder 'me2grid'.
 
 1. ['easybleak' BLE client library](#'easybleak'-ble-client-library)
 2. ['devices' library](#'devices'-library)
    - - [Texas Instruments Sensor Tag](#texas-instruments-sensor-tag)
-   - - [Radiator valve](#radiator-valve)
+   - - [EQ3 radiator valve](#eq3-radiator-valve)
+3. [Legal notice (Impressum)](#legal-notice)
+
+## Library usage
+To use the Python 'me2grid' library create a working folder on your computer. The library itself consists of the folder 'me2grid' which is placed inside the 'library' folder. Copy the complete folder 'me2grid' to your working folder.
+
+The folder 'library' also contains sample files which you can copy and use also, if you like.
 
 ## 'easybleak' BLE client library
 The 'easybleak' library provides an easy to use 'blue tooth low energy (BLE)' client for Python. It is an extension of the ['bleak' library](https://bleak.readthedocs.io/en/latest/installation.html) managed by Henrik Blidh and David Lechner.
@@ -172,7 +173,7 @@ What happens if you do not disconnect depends on your device you are using.
 
 *The Sensor Tag will remain in the connected state (for ever). After restarting your interpreter you will not be able to again connect to the Sensor Tag. The only way is to manually 'reset' the Sensor tag with a long (about 5 s) press on the power key. Afterwards you need to put it in advertising state with a short press on the power key.*
 
-Other devices (like the radiator valve) behave different. They release from the connected state automatically after a certain time of inactivity (few minutes). On the one hand this is a practical behavior as missed disconnects do not require manual actions. On the other hand, in case a program want to keep connected but has long inactivity before a next read instruction, this instruction will fail, as the device is not connected anymore. The 'easybleak' clients can deal with such an behavior as they will automatically reconnect in such cases.
+Other devices (like the [EQ3 radiator valve](#eq3-radiator-valve)) behave different. They release from the connected state automatically after a certain time of inactivity (few minutes). On the one hand this is a practical behavior as missed disconnects do not require manual actions. On the other hand, in case a program want to keep connected but has long inactivity before a next read instruction, this instruction will fail, as the device is not connected anymore. The 'easybleak' clients can deal with such an behavior as they will automatically reconnect in such cases.
 
 ### Recommended usage
 Connecting to a device is typically a time consuming task of several seconds. You probably don't want the read instruction taking so much time at first usage as this might disturb your program flow. Second, in case you do not explicitly connect your device you will tend to forget to disconnect from it.
@@ -255,7 +256,7 @@ asyncio.run(main())
 ```
 
 #### Method 'request'
-The 'ExtBleakClient' (and 'EasyBleakClient' as well) deliveres a 'request' method. This method simplifies the communication technique of command and response characteristics as e.g. used by the [Radiator valve](#radiator-valve). In such cases a coded command is written to the command characteristic and the device will response using a notification with a coded result from the response characteristic. If the vendor does not provide a service name for the command and response characteristics, the service shall be called 'RequestService' for device specific client implementations!
+The 'ExtBleakClient' (and 'EasyBleakClient' as well) deliveres a 'request' method. This method simplifies the communication technique of command and response characteristics as e.g. used by the [EQ3 radiator valve](#eq3-radiator-valve). In such cases a coded command is written to the command characteristic and the device will response using a notification with a coded result from the response characteristic. If the vendor does not provide a service name for the command and response characteristics, the service shall be called 'RequestService' for device specific client implementations!
 
 
 ### Exception handling
@@ -490,8 +491,302 @@ Now we are ready with the demonstration of the command line usage and should rel
 >>>
 ```
 
+#### Sample programs for the Sensor Tag
+A good practice for programming the Sensor Tag is to explicitly connect and to explicitly enable the sensors being used before first reading a sensor value. Also, don't forget to disconnect when closing the program. In this sense a program just reading the optical sensor does look like:
+
+```
+from me2grid.devices.texas_instruments import SensorTag
+from me2grid.devices.texas_instruments import IrTemperatureSensor, HumiditySensor, MotionSensor, BarometricPressureSensor, OpticalSensor, InputSensor, OutputActor
+from me2grid.devices.texas_instruments import OutputValues
+
+tag = SensorTag('54:6C:0E:52:C7:84')
+print("Connecting")
+tag.connect()
+print("Enabling optical sensor")
+tag.enableSensor(SensorTag.sensorServices()['OpticalSensor'])
+print("Reading light intensity from optical sensor")
+light = tag.readSensor(SensorTag.sensorServices()['OpticalSensor'])
+print(f"{light} Lux")
+print("Disconnecting")
+tag.disconnect()
+print("Ready")
+
+```
+
+You can run above (and the following source code blocks) out of the 'me2grid' library as these are part of the unit test.
+
+***Do not forget to set the Sensor Tag into advertising mode each time before you start a program!***
+
+```
+>>> from me2grid.devices.texas_instruments import programGettingStarted
+>>> programGettingStarted()
+Connecting
+Enabling optical sensor
+Reading light intensity from optical sensor
+434.40000000000003 Lux
+Disconnecting
+Ready
+>>>
+```
+
+Usually you want to write programs running in a more or less endless loop. This can basically be done in the following simple way.
+
+```
+import time
+from me2grid.devices.texas_instruments import SensorTag
+from me2grid.devices.texas_instruments import IrTemperatureSensor, HumiditySensor, MotionSensor, BarometricPressureSensor, OpticalSensor, InputSensor, OutputActor
+from me2grid.devices.texas_instruments import OutputValues
+
+tag = SensorTag('54:6C:0E:52:C7:84')
+print("Connecting")
+tag.connect()
+print("Enabling optical sensor")
+tag.enableSensor(SensorTag.sensorServices()['OpticalSensor'])
+stillRunning = 10
+print(f"Reading light intensity from optical sensor for {stillRunning} s")
+while stillRunning>0:
+    stillRunning = stillRunning -1
+    light = tag.readSensor(SensorTag.sensorServices()['OpticalSensor'])
+    print(f"{light:7.2f} Lux", end='\r')
+    time.sleep(1)
+print('')
+print("Disconnecting")
+tag.disconnect()
+print("Ready")
+```
+
+```
+>>> from me2grid.devices.texas_instruments import programSimpleSensing
+>>> programSimpleSensing()
+Connecting
+Enabling optical sensor
+Reading light intensity from optical sensor for 10 s
+   0.80 Lux
+Disconnecting
+Ready
+>>>
+```
+
+The alternative method to permanently poll the sensor values, like it has been done in the previous two examples, is to receive notifications. The notification mechanism is a feature provided by BLE and enables the device (in its server role) to send messages to the client without a previous read request from the client. The Sensor Tag supports this feature with all of the sensors. By using notifications, the sensors will only send notifications if their sensed value has changed, thus saving radio energy. But, you need to enable this feature.
+
+The 'SensorTag' client supports two options of taking advantage from notifications. The first option is just enabling the notification mechanism. In such cases the client collects all notifications and stores the received values to an internal member variable. Your application does not 'notice' the notifications and will still poll for the sensor results. But, it will poll at the 'SensorTag' instance instead of polling at the device directly over radio. No big difference to your software application but a big difference for energy consumption at the battery powered Sensor Tag.
+
+Notifications are enabled on a certain sensor service by calling the method 'notifySensor' and stopped by calling 'stopNotifySensor'. It is also necessary to periodically call the method 'getNofifications' in order to let the BLE client handle received notifications.
+
+```
+import time
+from me2grid.devices.texas_instruments import SensorTag
+from me2grid.devices.texas_instruments import IrTemperatureSensor, HumiditySensor, MotionSensor, BarometricPressureSensor, OpticalSensor, InputSensor, OutputActor
+from me2grid.devices.texas_instruments import OutputValues
+
+tag = SensorTag('54:6C:0E:52:C7:84')
+print("Connecting")
+tag.connect()
+print("Enabling optical sensor, including notifications")
+tag.enableSensor(OpticalSensor)
+tag.notifySensor(OpticalSensor)
+stillRunning = 10
+print(f"Reading light intensity from optical sensor for {stillRunning} s")
+while stillRunning>0:
+    stillRunning = stillRunning -1
+    light = tag.getSensorValue(OpticalSensor)
+    print(f"Measurement count {stillRunning:3d}: {light:7.2f} Lux", end='\r')
+    time.sleep(1)
+    tag.getNotifications()
+print('')
+print("Disconnecting")
+tag.stopNotifySensor(OpticalSensor)
+tag.disconnect()
+print("Ready")
+```
+
+```
+>>> from me2grid.devices.texas_instruments import programSimpleNotification
+>>> programSimpleNotification()
+Connecting
+Enabling optical sensor, including notifications
+Reading light intensity from optical sensor for 10 s
+Measurement count   0  113.96 Lux
+Disconnecting
+Ready
+>>>
+```
+
+The second option of notification support given by the 'SensorTag' object does also enhance your application. By providing a notification handler to the 'notifySensor' method the 'SensorTag' (as well as 'EasyBleakClient' and 'ExtBleakClient') object will call this handler as a callback method. For the synchronous programming style used in this sample programs this call will actually happen within the call of the 'getNotifications' method. Using this callback method you can (virtually) avoid polling as your application only reacts on new incoming values. (So far, polling is only virtually avoided, as the necessary periodic call to 'getNotifications' is at the end a polling process also.)
+
+The following example introduces the method 'onOpticalSensor' as notification handler. The notification handler must accept one parameter which contains the sensor value the same way the 'readSensor' methods returns.
+
+```
+import time
+from me2grid.devices.texas_instruments import SensorTag
+from me2grid.devices.texas_instruments import IrTemperatureSensor, HumiditySensor, MotionSensor, BarometricPressureSensor, OpticalSensor, InputSensor, OutputActor
+from me2grid.devices.texas_instruments import OutputValues
+
+count = 0
+
+def onOpticalSensor(value):
+    global count
+    count = count + 1
+    print(f"Measurement count {count:3d}: {value:7.2f} Lux", end='\r')
+
+tag = SensorTag('54:6C:0E:52:C7:84')
+print("Connecting")
+tag.connect()
+print("Enabling optical sensor, including notifications")
+tag.enableSensor(OpticalSensor)
+tag.notifySensor(OpticalSensor, onOpticalSensor)
+stillRunning = 5
+print(f"Reading light intensity from optical sensor for {stillRunning*2} s")
+while stillRunning>0:
+    stillRunning = stillRunning -1
+    time.sleep(2)
+    tag.getNotifications()
+tag.stopNotifySensor(OpticalSensor)
+print('')
+print("Disconnecting")
+tag.disconnect()
+print("Ready")
+```
+
+There is one odd thing with the following program you should notice. The sleep time of the "endless" loop is set to 2 s. For that reason only every 2 s notifications are handled and displayed. If you follow the measurement count variable you can see that many more notifications are actually receive. But some of them are overwritten too fast that you cannot follow them.
+
+```
+>>> from me2grid.devices.texas_instruments import programCallbackNotification
+>>> programCallbackNotification()
+Connecting
+Enabling optical sensor, including notifications
+Reading light intensity from optical sensor for 10 s
+Measurement count  12:   31.36 Lux
+Disconnecting
+Ready
+>>>
+```
+
+The next and last enhancement to be reached with notifications is to really avoid polling operation. Without polling your application will receive new values immediately leading to a very good performance. Although the 'SensorTag' class is based on the 'EasyBleakClient' featuring synchronous programming, it is nevertheless possible to take advantage of the underlying asynchronous programming technique.
+The "trick" is simple but effective. It is possible to pass a wait time to the method 'getNotifications'. That way the method will handle all notifications that have been received since its last call and all notifications received during the wait time. This the call to the blocking 'time.sleep' method is not necessary any more.
+
+```
+import time
+from me2grid.devices.texas_instruments import SensorTag
+from me2grid.devices.texas_instruments import IrTemperatureSensor, HumiditySensor, MotionSensor, BarometricPressureSensor, OpticalSensor, InputSensor, OutputActor
+from me2grid.devices.texas_instruments import OutputValues
+
+count = 0
+
+def onOpticalSensor(value):
+    global count
+    count = count + 1
+    print(f"Measurement count {count:3d}: {value:7.2f} Lux", end='\r')
+    
+tag = SensorTag('54:6C:0E:52:C7:84')
+print("Connecting")
+tag.connect()
+print("Enabling optical sensor, including notifications")
+tag.enableSensor(OpticalSensor)
+# tag.writeSensorPeriod(OpticalSensor, 0.1)
+tag.notifySensor(OpticalSensor, onOpticalSensor)
+stillRunning = 5
+print(f"Reading light intensity from optical sensor for {stillRunning*2} s")
+while stillRunning>0:
+    stillRunning = stillRunning -1
+    tag.getNotifications(2)
+tag.stopNotifySensor(OpticalSensor)
+print('')
+print("Disconnecting")
+tag.disconnect()
+print("Ready")
+```
+
+Just a slight change in code, but now you can see and follow all measurements.
+Uncomment the command line calling the 'writeSensorPeriod' method to get an impressive measuring result!
+
+### EQ3 radiator valve
+The control of radiators for room heating is an relevant factor for an energy management at home as well as for company facilities. The 'me2grid.devices' library provides a BLE client for the radiator valve from EQ3 for the type CC-RT-BLE.
+
+Thanks to the work and publication of "heckie75", who did a great job on evaluating the BLE protocol of that device, it was possible to develop and provide the client implementation for Python (see: [eq-3-radiator-thermostat-api](https://github.com/Heckie75/eQ-3-radiator-thermostat/blob/master/eq-3-radiator-thermostat-api.md)).
+
+#### Getting started with EQ3 radiator valve
+The following example program just reads the operating mode and target temperature of the valve. (Although not comprehensible, there does not seem to be an option to read the actual room temperature. Maybe, the 'UnknownService' delivers this information.)
+
+***Hint: The EQ3 must be error free installed at a radiator, otherwise at least some BLE communication cannot be established. Under some unclear circumstances the EQ3 also does not respond to requests in case it is in manual mode! Nevertheless, it does respond to a serial number request. Furthermore, it does accept command values, although commands will not be responded to. Switch the valve to automatic mode by BLE command or manually to continue communication.***
+
+```
+from me2grid.devices.eq3 import CC_RT_BLE
+
+valve = CC_RT_BLE("00:1A:22:12:0F:87")
+print("Connecting")
+valve.connect()
+print("Reading values")
+valve.readModes()
+print(valve.modes)
+print("Temperature target value:")
+print(str(valve.readTargetTemperature()) + " °C")
+print("Disconnecting")
+valve.disconnect()
+print("Ready")
+```
+
+```
+>>> from me2grid.devices.eq3 import programGettingStarted
+>>> programGettingStarted()
+Connecting
+Reading values
+[<Mode.AUTO: 254>]
+17.0 °C
+Disconnecting
+Ready
+>>>
+```
+
+Please, refer to the code for further methods to control the valve.
+
+
+## Legal notice
+
+The responsibility for the 'me2grid' library and this publication and documentation has
+
+Dr. Olaf Simon
+Obere Mühlstr. 39
+76646 Bruchsal
+o_simon@t-online.de
+
+The intention of the project this library supports, is enhancing measures against the climate disaster, for companies as well as for private persons. This shall be mainly reached by providing energy management solutions required for isolated regenerative electric energy generation and reliable grid feed-in, in the sense of availability at all times.
+
+Doing so, public source software has been used and the author feels responsible to also provide results as public source.
+
+### Product references
+
+This publication mentions third party products. All mentioned products have been chosen because their communication protocol has either been published by the manufacture or has been decoded by the author or a third party. In case the author receives information of manufacturers, the protocol decoding breaches their rights links to those information and software using this knowledge will promptly be deleted from this publication. In such a case the author will also remove mentioning such a product as public knowledge of the protocol is a mandatory precondition for the intention of this project.
+
+Manufacturers intending their products to be referenced to, are welcome. Nevertheless, it is a mandatory precondition to have a published protocol to control these products.
+
+Mentioned products have been purchased on expenses of the author. The intention is testing the software and providing third party users to reproduce such tests. The aim of this library is being independent from certain products and to give support to as many products as possible. There is and has not been any direct or indirect financial support from third party persons or companies given to the author.
+
+### Formal notice
+
+As this manual and software is provided and published in the same sense as internet pages out of Germany, an Impressum accompanied with legal notices is required by German law. For this reason the legal notices are formulated in German language.
+
+#### Haftung für Inhalte
+
+Als Diensteanbieter sind wir gemäß § 7 Abs.1 TMG für eigene Inhalte auf diesen Seiten nach den allgemeinen Gesetzen verantwortlich. Nach §§ 8 bis 10 TMG sind wir als Diensteanbieter jedoch nicht verpflichtet, übermittelte oder gespeicherte fremde Informationen zu überwachen oder nach Umständen zu forschen, die auf eine rechtswidrige Tätigkeit hinweisen.
+
+Verpflichtungen zur Entfernung oder Sperrung der Nutzung von Informationen nach den allgemeinen Gesetzen bleiben hiervon unberührt. Eine diesbezügliche Haftung ist jedoch erst ab dem Zeitpunkt der Kenntnis einer konkreten Rechtsverletzung möglich. Bei Bekanntwerden von entsprechenden Rechtsverletzungen werden wir diese Inhalte umgehend entfernen.
+Haftung für Links
+Unser Angebot enthält Links zu externen Webseiten Dritter, auf deren Inhalte wir keinen Einfluss haben. Deshalb können wir für diese fremden Inhalte auch keine Gewähr übernehmen. Für die Inhalte der verlinkten Seiten ist stets der jeweilige Anbieter oder Betreiber der Seiten verantwortlich. Die verlinkten Seiten wurden zum Zeitpunkt der Verlinkung auf mögliche Rechtsverstöße überprüft. Rechtswidrige
+Inhalte waren zum Zeitpunkt der Verlinkung nicht erkennbar.
+
+#### Urheberrecht
+
+Die durch die Seitenbetreiber erstellten Inhalte und Werke auf diesen Seiten unterliegen dem deutschen Urheberrecht. Die Vervielfältigung, Bearbeitung, Verbreitung und jede Art der Verwertung unterliegen der "GPL-3.0 License", welche im Bereich des Software Downloads hinterlegt ist. Jede Form der Verwendung außerhalb der Grenzen dieser Lizenz und des Urheberrechtes bedürfen der schriftlichen Zustimmung des jeweiligen Autors bzw. Erstellers. 
+
+Soweit die Inhalte auf dieser Seite nicht vom Betreiber erstellt wurden, werden die Urheberrechte Dritter beachtet. Insbesondere werden Inhalte Dritter als solche gekennzeichnet. Sollten Sie trotzdem auf eine Urheberrechtsverletzung aufmerksam werden, bitten wir um einen entsprechenden Hinweis. Bei Bekanntwerden von Rechtsverletzungen werden wir derartige Inhalte umgehend entfernen.
+
+In abgewandelter Form basierend auf der Quelle: [e-recht24](https://www.e-recht24.de/impressum-generator.html)
+
+#### Markenzeichen
+
+Diese Seiten enthalten Markennamen und Markenzeichen Dritter. Es ist die Intention des Autors, diese Namen im Sinne der Inhaber der Markenrechte zu verwenden. Sofern bekannt wird, dass dies nicht der Fall ist, werden solche Umstände umgehend behoben.
 
 
 
 
-### Radiator valve
