@@ -52,3 +52,11 @@ class GenericDescriptors(BaseService):
     @classmethod
     def uuidService(cls) -> Union[str, None]:
         return None
+
+class BatteryService(BaseService):
+    """! @brief Deliveres the battery state of charge in % """
+    DATA = CharacteristicType("00002a19-0000-1000-8000-00805f9b34fb")           #!> Descriptor for enabling notifications
+
+    @classmethod
+    def uuidService(cls) -> Union[str, None]:
+        return "0000180f-0000-1000-8000-00805f9b34fb"

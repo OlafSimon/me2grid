@@ -71,18 +71,19 @@ Viewing the code helped developing my SensorTag implementation concept.
 #from datetime import datetime, timedelta
 
 import time
+import math 
 from typing import Union
 from enum import Enum
 
 try: # Necessary, to run this file directly
     from .easybleak.EasyBleakClient import EasyBleakClient
     from .easybleak.ExtBleakClient import BaseService, CharacteristicType
-    from .easybleak.gatt import BLE_UUID
+    from .easybleak.gatt import BLE_UUID, ClassServices
     from .BibPy.mathlib.Vector3 import Vector3
 except:
     from me2grid.easybleak.EasyBleakClient import EasyBleakClient
     from me2grid.easybleak.ExtBleakClient import BaseService, CharacteristicType
-    from me2grid.easybleak.gatt import BLE_UUID
+    from me2grid.easybleak.gatt import BLE_UUID, ClassServices
     from me2grid.BibPy.mathlib.Vector3 import Vector3
 
 # TI SensorTag specific predifined services
@@ -196,7 +197,7 @@ class OAD(BaseService):
     def uuidService(cls) -> str:
         return TI_UUID(0xffc0)
 
-sensorTagServices = {"IrSensor": IrTemperatureSensor, "HumiditySensor": HumiditySensor, "MotionSensor": MotionSensor, "BarometricPressureSensor": BarometricPressureSensor, "OpticalSensor": OpticalSensor, "InputSensor": InputSensor, "OutputActor": OutputActor}
+sensorTagServices = ClassServices({"IrTemperatureSensor": IrTemperatureSensor, "HumiditySensor": HumiditySensor, "MotionSensor": MotionSensor, "BarometricPressureSensor": BarometricPressureSensor, "OpticalSensor": OpticalSensor, "InputSensor": InputSensor, "OutputActor": OutputActor})
 """! List of services provided by the Sensor Tag """
     
 class MotionValues():
@@ -239,7 +240,7 @@ class OutputValues():
     
 class InputValues():
     """! brief Contains input bits 'userKey', 'powerKey' and 'reedRelai' of type 'bool' indicating if they are closed (True) or open (False) """
-    def __init__(self, data: bytearray):
+    def __init__(self, data: bytearray = bytearray(b'\x00')):
         """! brief Constructor """
         self.userKey = (int(data[0]) & 1) != 0
         self.powerKey = (int(data[0]) & 2) != 0
@@ -264,7 +265,7 @@ class SensorActor():
     @property
     def value(self):
         """' @brief Retrieves the gatt service enumeration of the sensor derived from type 'BaseService' """
-        return self.__value        
+        return self.__value
     
     def decode(self, data: bytearray, config: bytearray = None) -> Union[float, tuple, MotionValues, InputValues, OutputValues, None]:
         """! @brief \b virtual Method for derived classes to return calculated sensor values from the passed data bytearray
@@ -276,8 +277,7 @@ class SensorActor():
             @param config Optional 'bytearray' received from the sensor CONFIGURATIONIG characteristc of the passed service
             @returns The calculated sensor data in case the passed service fits the service the derived class is derived for. 'None' otherwise.
         """
-        if service is not self.service:
-            return None
+        return None
         
     def __returnFromDecode__(self, decodedValue: Union[float, tuple, MotionValues, InputValues, OutputValues, None]) -> Union[float, tuple, MotionValues, InputValues, OutputValues, None]:
         """! @ Memorizes the last decoded value
@@ -322,9 +322,9 @@ class SensorActor():
            
     def _OnNotification_(self, sender, data: bytearray) -> Union[float, tuple, MotionValues, None]:
         """! @brief Handler method for sensor notifications to be passed to the BLE client on 'start_notify' """
-        value = self.decode(data)
+        self.__value = self.decode(data)
         if self.__applicationNotificationHandler is not None:
-            self.__applicationNotificationHandler(value)
+            self.__applicationNotificationHandler(self.__value)
             
     def _setNotificationHandler_(self, notificationHandler):
         """! @brief To be called from the BLE client applicatoin interface method 'start_notify' in order to set the application callback handler for this sensor """
@@ -370,8 +370,6 @@ class SensorIrTemperature(SensorActor):
             @param data The data bytearray to be decoded
             @returns A tuple with targeted object temperature and the ambient temperature in °C
         """
-        if super().decode(service, data) is None:
-            return None
         SensorActor._checkSize_(data, 4)
         rawVobj = int.from_bytes(data[0:2], "little", signed=False)
         rawTamb = int.from_bytes(data[2:4], "little", signed=False)
@@ -379,10 +377,10 @@ class SensorIrTemperature(SensorActor):
         tAmb = rawTamb / 128.0
         Vobj = 1.5625e-7 * rawVobj
         tDie = tAmb + SensorIrTemperature.zeroC
-        S    = S0 * SensorIrTemperature.__calcPoly__(SensorIrTemperature.Apoly, tDie-tRef)
-        Vos  = SensorIrTemperature.__calcPoly__(SensorIrTemperature.Bpoly, tDie-tRef)
+        S    = SensorIrTemperature.S0 * SensorIrTemperature.__calcPoly__(SensorIrTemperature.Apoly, tDie-SensorIrTemperature.tRef)
+        Vos  = SensorIrTemperature.__calcPoly__(SensorIrTemperature.Bpoly, tDie-SensorIrTemperature.tRef)
         fObj = SensorIrTemperature.__calcPoly__(SensorIrTemperature.Cpoly, Vobj-Vos)
-        tObj = math.pow( math.pow(tDie, 4.0) + (fObj/SensorIrTemperature.S), 0.25 ) - SensorIrTemperature.zeroC
+        tObj = math.pow( math.pow(tDie, 4.0) + (fObj/S), 0.25 ) - SensorIrTemperature.zeroC
         
         return self.__returnFromDecode__( (float(tObj), float(tAmb)) )
         
@@ -444,7 +442,7 @@ class SensorMotion(SensorActor):
         gyrZ = int.from_bytes(data[4:6], "little", signed=True)  / 32768 * 250
         # Acceleration of motion sensor
         if config is None and self.config is None:
-            print('Config missing')
+            # print('Config missing')
             accX = 0
             accY = 0
             accZ = 0
@@ -500,6 +498,7 @@ class SensorInput(SensorActor):
     def __init__(self):
         super().__init__(InputSensor)
         self._isEnabled = True
+        self.__returnFromDecode__( InputValues() ) # Initialising __value member
         
     def decode(self, data: bytearray, config: bytearray = None) -> Union[float, tuple, MotionValues, InputValues, OutputValues, None]:
         """! @brief Decodes input sensor data
@@ -578,21 +577,30 @@ class Sensors():
  
 class SensorTag(EasyBleakClient):
     """! @brief Sensor Tag BLE client based on \ref EasyBleakClient """
+
+    __services__ : ClassServices = EasyBleakClient.createAppendedServices(sensorTagServices)
+
     def __init__(self, mac: str):
         super().__init__(mac)
-        SensorTag.appendServiceDict(sensorTagServices)
         self._sensors = Sensors()
         self.lastException = None
-        self.notifySensor(InputSensor, None)
             
-    @classmethod
-    def services(cls) -> dict:
+    @staticmethod
+    def sensorServices() -> ClassServices:
         """! @brief Returns a dictionary of SensorTag services, only
             This method is equivalent to the 'gatt' property but contains less content. On the other hand, the delivered content
             is appropriate for all application interfacing methods of this class. \n
             The usage is e.g. SensorTag.services()["OpticalSensor"] .
         """
         return sensorTagServices
+    
+    def connect(self):
+        super().connect()
+        self.notifySensor(InputSensor, None)        
+        
+    def disconnect(self):
+        self.stopNotifySensor(InputSensor)        
+        super().disconnect()
         
     def readSensor(self, service: BaseService, noExceptions = True) -> Union[float, tuple, MotionValues, InputValues, OutputValues, None]:
         """! @brief Reads from a service provided by the Sensor Tag
@@ -622,6 +630,15 @@ class SensorTag(EasyBleakClient):
         data = self.read(service.DATA)
         return sensor.decode(data)     
     
+    def readAllSensors(self):
+        """! @brief Reads all sensor values, storing the result within this instance
+            The value can be accessed to by calling the 'getSensorValue' method.
+        """
+        for service in self.sensorServices().values():
+            if service is not InputSensor:
+                self.readSensor(service)
+        self.getNotifications()  # Acquiring input sensor notifications
+        
     def writeSensor(self, service: BaseService, value: OutputValues):
         """! @brief Writes to an actor service provided by the Sensor Tag
             - 'OutputActor'
@@ -644,21 +661,37 @@ class SensorTag(EasyBleakClient):
         sensor = self._sensors.find(service)
         return sensor.value        
         
-    def enableSensor(self, service: BaseService, enable: bool = True):
+    def enableSensor(self, service: BaseService, enable: bool = True, waitTime: float = 1.5):
         """! @brief Enables or disables the sensor according to 'service' to take measurements
             @param service A sensor service, e.g. out of the 'dict' 'SensorTag.services'
             @param enable 'True' to enable, 'False' to disable
-            @returns 'bool' value indicating success
+            @param waitTime Sensors require a start up time before valid measurements can be taken. If severel sensors are to be enalbled, wait time is only required after the last enable call.
         """
         if not self.is_connected:
             self.connect()
         sensor = self._sensors.find(service)
         if service is not InputSensor:
             cfg = sensor.enableCode(enable)
+            if sensor.service is OutputSensor:
+                self.write(sensor.service.DATA, 0)
             self.write(service.CONFIGURATION, cfg)
             if  service is MotionSensor:
                 sensor.config = cfg
-            time.sleep(1.5)
+            time.sleep(waitTime)
+        
+    def enableAllSensors(self, enable: bool = True):
+        """! @brief Enables or disables all sensor of the Sensor Tag to take measurements
+            @param enable 'True' to enable, 'False' to disable
+        """
+        for sensor in self._sensors:
+            if sensor.service is not InputSensor:
+                cfg = sensor.enableCode(enable)
+                if sensor.service is OutputActor:
+                    self.write(sensor.service.DATA, b'\x00')
+                self.write(sensor.service.CONFIGURATION, cfg)
+                if  sensor.service is MotionSensor:
+                    sensor.config = cfg
+        time.sleep(1.5)
         
     def readSensorEnabled(self, service: BaseService) -> bool:
         """! @brief Actually reads from the sensor to veryfy if it is enabled to take measurements
@@ -691,7 +724,7 @@ class SensorTag(EasyBleakClient):
         self.__checkEnabled__(service)
         return SensorTag._decodePeriodTime(self.read(service.PERIOD))
 
-    def notifySensor(self, service: BaseService, notificationHandler) -> bool:
+    def notifySensor(self, service: BaseService, notificationHandler = None) -> bool:
         """! @brief Enales notifications from the passed sensor service and sets the appropriate notification handler
             If 'None' is passed as 'notificationHandler' the notifications will be collected by the Sensor Tag client and received values are stored.
             These values can be accessed using the method getSensor().
@@ -700,20 +733,36 @@ class SensorTag(EasyBleakClient):
             @returns 'bool' value indicating success
         """
         sensor = self.__checkEnabled__(service)
+        if service is not InputSensor:
+            self.readSensor(service)    # in order to initialize the memorized sensor value (sensor.value) you access by calling getSensorValue()
         self.start_notify(service.DATA, sensor._OnNotification_)
         sensor._setNotificationHandler_(notificationHandler)
                
-    def stopNotifySensor(self, service: BaseService) -> bool:
+    def notifyAllSensors(self):
+        """! @brief Activates notifications from all sensors
+            Received notification values can be accessed by calling the 'getSensorValue' method.
+        """
+        for service in self.sensorServices().values():
+            if service is not InputSensor and service is not OutputActor:
+                self.notifySensor(service)
+        
+    def stopNotifySensor(self, service: BaseService):
         """! @brief Disables notifications from the passed sensor service
             @param service A sensor service, e.g. out of the 'dict' 'SensorTag.services'
-            @returns 'bool' value indicating success
         """
         sensor = self.__checkEnabled__(service)
         if service is not InputSensor:
             self.stop_notify(service.DATA)
         sensor._setNotificationHandler_(None)
-        return True
+        return
    
+    def stopNotifyAllSensors(self):
+        """! @brief Deactivates notifications from all sensors
+        """
+        for service in self.sensorServices().values():
+            if service is not InputSensor and service is not OutputActor:
+                self.stopNotifySensor(service)
+        
     def __checkEnabled__(self, service) -> SensorActor:
         """! @brief Checks, whether the device is connected and the passed service already has been enabled and returns the corresponding 'SensorActor' instance """ 
         if not self.is_connected:
@@ -725,25 +774,182 @@ class SensorTag(EasyBleakClient):
             self.enableSensor(service)
         return sensor
 
-def gettingStarted():
+def programGettingStarted():
+    from me2grid.devices.texas_instruments import SensorTag
+    from me2grid.devices.texas_instruments import IrTemperatureSensor, HumiditySensor, MotionSensor, BarometricPressureSensor, OpticalSensor, InputSensor, OutputActor
+    from me2grid.devices.texas_instruments import OutputValues
+
     tag = SensorTag('54:6C:0E:52:C7:84')
     print("Connecting")
     tag.connect()
     print("Enabling optical sensor")
-    tag.enableSensor(SensorTag.services()['OpticalSensor'])
+    tag.enableSensor(SensorTag.sensorServices()['OpticalSensor'])
     print("Reading light intensity from optical sensor")
-    light = tag.readSensor(SensorTag.services()['OpticalSensor'])
+    light = tag.readSensor(SensorTag.sensorServices()['OpticalSensor'])
     print(f"{light} Lux")
+    print("Disconnecting")
+    tag.disconnect()
+    print("Ready")
+
+def programSimpleSensing():
+    import time
+    from me2grid.devices.texas_instruments import SensorTag
+    from me2grid.devices.texas_instruments import IrTemperatureSensor, HumiditySensor, MotionSensor, BarometricPressureSensor, OpticalSensor, InputSensor, OutputActor
+    from me2grid.devices.texas_instruments import OutputValues
+
+    tag = SensorTag('54:6C:0E:52:C7:84')
+    print("Connecting")
+    tag.connect()
+    print("Enabling optical sensor")
+    tag.enableSensor(SensorTag.sensorServices()['OpticalSensor'])
+    stillRunning = 10
+    print(f"Reading light intensity from optical sensor for {stillRunning} s")
+    while stillRunning>0:
+        stillRunning = stillRunning -1
+        light = tag.readSensor(SensorTag.sensorServices()['OpticalSensor'])
+        print(f"{light:7.2f} Lux", end='\r')
+        time.sleep(1)
+    print('')
+    print("Disconnecting")
+    tag.disconnect()
+    print("Ready")
+
+def programSimpleNotification():
+    import time
+    from me2grid.devices.texas_instruments import SensorTag
+    from me2grid.devices.texas_instruments import IrTemperatureSensor, HumiditySensor, MotionSensor, BarometricPressureSensor, OpticalSensor, InputSensor, OutputActor
+    from me2grid.devices.texas_instruments import OutputValues
+
+    tag = SensorTag('54:6C:0E:52:C7:84')
+    print("Connecting")
+    tag.connect()
+    print("Enabling optical sensor, including notifications")
+    tag.enableSensor(OpticalSensor)
+    tag.notifySensor(OpticalSensor)
+    stillRunning = 10
+    print(f"Reading light intensity from optical sensor for {stillRunning} s")
+    while stillRunning>0:
+        stillRunning = stillRunning -1
+        light = tag.getSensorValue(OpticalSensor)
+        print(f"Measurement count {stillRunning:3d}: {light:7.2f} Lux", end='\r')
+        time.sleep(1)
+        tag.getNotifications()
+    print('')
+    print("Disconnecting")
+    tag.stopNotifySensor(OpticalSensor)
+    tag.disconnect()
+    print("Ready")
+
+count = 0
+
+def programCallbackNotification():
+    import time
+    from me2grid.devices.texas_instruments import SensorTag
+    from me2grid.devices.texas_instruments import IrTemperatureSensor, HumiditySensor, MotionSensor, BarometricPressureSensor, OpticalSensor, InputSensor, OutputActor
+    from me2grid.devices.texas_instruments import OutputValues
+
+    global count
+    count = 0
+    
+    def onOpticalSensor(value):
+        global count
+        count = count + 1
+        print(f"Measurement count {count:3d}: {value:7.2f} Lux", end='\r')
+        
+    tag = SensorTag('54:6C:0E:52:C7:84')
+    print("Connecting")
+    tag.connect()
+    print("Enabling optical sensor, including notifications")
+    tag.enableSensor(OpticalSensor)
+    tag.notifySensor(OpticalSensor, onOpticalSensor)
+    stillRunning = 5
+    print(f"Reading light intensity from optical sensor for {stillRunning*2} s")
+    while stillRunning>0:
+        stillRunning = stillRunning -1
+        time.sleep(2)
+        tag.getNotifications()
+    tag.stopNotifySensor(OpticalSensor)
+    print('')
+    print("Disconnecting")
+    tag.disconnect()
+    print("Ready")
+
+def programFastNotification():
+    import time
+    from me2grid.devices.texas_instruments import SensorTag
+    from me2grid.devices.texas_instruments import IrTemperatureSensor, HumiditySensor, MotionSensor, BarometricPressureSensor, OpticalSensor, InputSensor, OutputActor
+    from me2grid.devices.texas_instruments import OutputValues
+
+    global count
+    count = 0
+    
+    def onOpticalSensor(value):
+        global count
+        count = count + 1
+        print(f"Measurement count {count:3d}: {value:7.2f} Lux", end='\r')
+        
+    tag = SensorTag('54:6C:0E:52:C7:84')
+    print("Connecting")
+    tag.connect()
+    print("Enabling optical sensor, including notifications")
+    tag.enableSensor(OpticalSensor)
+    tag.writeSensorPeriod(OpticalSensor, 0.1)
+    tag.notifySensor(OpticalSensor, onOpticalSensor)
+    stillRunning = 5
+    print(f"Reading light intensity from optical sensor for {stillRunning*2} s")
+    while stillRunning>0:
+        stillRunning = stillRunning -1
+        tag.getNotifications(2)
+    tag.stopNotifySensor(OpticalSensor)
+    print('')
+    print("Disconnecting")
+    tag.disconnect()
+    print("Ready")
+
+def programMeasureAll(runTime: int = 20):
+    from me2grid.devices.texas_instruments import SensorTag
+    from me2grid.devices.texas_instruments import IrTemperatureSensor, HumiditySensor, MotionSensor, BarometricPressureSensor, OpticalSensor, InputSensor, OutputActor
+    from me2grid.devices.texas_instruments import OutputValues
+    
+    cycle = 0.2
+    
+    tag = SensorTag('54:6C:0E:52:C7:84')
+    print("Connecting")
+    tag.connect()
+    print("Enabling and activating notifications for all sensors")
+    tag.enableAllSensors()
+    tag.notifyAllSensors()
+    stillRunning = int(runTime) / cycle
+    print(f"Displying all sensor values for {int(runTime)} s")
+    while stillRunning>0:
+        stillRunning = stillRunning -1
+        
+        ir = tag.getSensorValue(IrTemperatureSensor)[0]
+        hum = tag.getSensorValue(HumiditySensor)
+        motion = tag.getSensorValue(MotionSensor)
+        bar, temp = tag.getSensorValue(BarometricPressureSensor)
+        light = tag.getSensorValue(OpticalSensor)
+        input = tag.getSensorValue(InputSensor)
+        out = tag.getSensorValue(OutputActor)
+        
+        gyr = motion.gyroscope
+        acc = motion.acceleration
+        mag = motion.magnetism
+        
+        print(f"IR: {ir:7.2f} °C, {hum:7.2f} %RH, [{gyr.x:7.2f}, {gyr.y:7.2f}, {gyr.z:7.2f}] deg/s, [{acc.x:7.2f}, {acc.y:7.2f}, {acc.z:7.2f}] deg/s, [{mag.x:7.2f}, {mag.y:7.2f}, {mag.z:7.2f}] uT, {bar:7.2f} mbar, {temp:7.2f} °C, {light:7.2f} Lux, User Key {1 if input.userKey else 0}, Power Key {1 if input.powerKey else 0}, Reed {1 if input.userKey else 0}", end="\r")
+         
+        tag.getNotifications(cycle)
+    tag.stopNotifyAllSensors()
+    print('')
     print("Disconnecting")
     tag.disconnect()
     print("Ready")
 
 if __name__ == '__main__':
     
-    # inputUUID = '0000ffe1-0000-1000-8000-00805f9b34fb'
-
-    # def myOnNotify(sender, data):
-    #    print("Notification from {0}: {1}".format(sender, data))
-    
     gettingStarted()
-    
+programSimpleSensing
+programSimpleNotification
+programCallbackNotification
+programFastNotification
+programMeasureAll

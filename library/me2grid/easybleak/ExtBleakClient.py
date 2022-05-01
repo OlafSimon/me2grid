@@ -19,11 +19,11 @@ from bleak import BleakClient
 
 try: # Necessary, to run this file directly
     from gatt import versionEasyBleak, BaseService, CharacteristicType, ClassServices
-    from gatt_services import GenericAccessService, GenericAttributeProfileService, GenericDescriptors, DeviceInformationService
+    from gatt_services import GenericAccessService, GenericAttributeProfileService, GenericDescriptors, DeviceInformationService, BatteryService
     from gatt import versionEasyBleak, BaseService, CharacteristicType, ClassServices
 except:
     from me2grid.easybleak.gatt import versionEasyBleak, BaseService, CharacteristicType, ClassServices
-    from me2grid.easybleak.gatt_services import GenericAccessService, GenericAttributeProfileService, GenericDescriptors, DeviceInformationService
+    from me2grid.easybleak.gatt_services import GenericAccessService, GenericAttributeProfileService, GenericDescriptors, DeviceInformationService, BatteryService
     from me2grid.easybleak.gatt import versionEasyBleak, BaseService, CharacteristicType, ClassServices
 
 class GATT_Dict():
@@ -34,19 +34,23 @@ class GATT_Dict():
         print(ExtBleakClient.gatt)
         @endcode
     """
-    __services__ = ClassServices({"GenericAccessService": GenericAccessService, "GenericAttributeProfileProfile": GenericAttributeProfileService, "GenericDescriptors": GenericDescriptors, "DeviceInformationService": DeviceInformationService})
+    __services__ = ClassServices({"GenericAccessService": GenericAccessService, "GenericAttributeProfileService": GenericAttributeProfileService, "GenericDescriptors": GenericDescriptors, "DeviceInformationService": DeviceInformationService, "BatteryService": BatteryService})
 
     @classmethod
-    def gatt(cls):
+    def gatt(cls) -> ClassServices:
         """! @brief \b static Deliveres the predefined GATT (generic attributes) of the device as a dictionary of services with readable enumerations of there characteristics
             As these attributes are predefined, the device may not necessarily implement all these attributs, espessially concerning the generic services.
         """
         return cls.__services__
     
     @classmethod
-    def appendServiceDict(cls, serviceDict: ClassServices):
-        """! @brief \b static Appents a service dictionary to the GATT_Dict objects dictionary
+    def createAppendedServices(cls, serviceDict: ClassServices) -> ClassServices:
+        """! @brief \b static Returns a new 'ClassService' instance containing the GATT_Dict objects dictionary updated by the passed serviceDict
         """
+        ret = ClassServices(cls.__services__)
+        ret.update(serviceDict)
+        return ret
+    
         cls.__services__ .update(serviceDict)
 
     @classmethod
@@ -161,6 +165,7 @@ class ExtBleakClient(BleakClient, GATT_Dict):
         super().__init__(mac)
         self.requestCommandUUID = None
         self.requestResponseUUID = None
+        self.requestNotificationStarted = None
         self.requestNotifycationResult = None
         self.requestTimeOut = 1.0
         self.requestResponseTime = 0.0
@@ -177,7 +182,7 @@ class ExtBleakClient(BleakClient, GATT_Dict):
         except EOFError:    # Needed, in case the external device has already disconnected without notice.
             pass
         
-    async def read(self, uuid: Union[BaseService, BleakGATTCharacteristic, int, str, UUID]) -> Union[bytearray, str, int]:
+    async def read(self, uuid: Union[BaseService, BleakGATTCharacteristic, int, str, UUID] = DeviceInformationService.MODEL) -> Union[bytearray, str, int]:
         """! @brief Reading a GATT characteristic value"""
         # Some devices desconnect without notice to the client. In such cases the next access fails and one try to reconnect is executed.
         uid = uuid
@@ -244,58 +249,56 @@ class ExtBleakClient(BleakClient, GATT_Dict):
     
     async def __startResponseNotification__(self, requestResponseUUID, force = False):
         """ Does nothing in case the 'requestResponseUUID' has already started notifying earlier. """
-        if not force and self.requestResponseUUID == requestResponseUUID:
+        if not force and self.requestResponseUUID == requestResponseUUID and self.requestNotificationStarted:
             return
         if not force:
             await self.__stopResponseNotification__() 
         uid = requestResponseUUID
         if isinstance(uid, BaseService):
             uid = uid.value.uuid
-        #print("-> start notify")
         await self.start_notify(uid, self.__response_notification_handler__)
+        self.requestNotificationStarted = True
         self.requestResponseUUID = requestResponseUUID
 
     async def __stopResponseNotification__(self):
-        if self.requestResponseUUID is None:
+        if self.requestNotificationStarted is None:
             return
         #print("-> stop notify")
         uid = self.requestResponseUUID
         if isinstance(uid, BaseService):
             uid = uid.value.uuid
         await self.stop_notify(uid)
-        self.requestResponseUUID = None
+        self.requestNotificationStarted = None
         await asyncio.sleep(self.requestTimeOut)  # This is necessary as e.g. the EQ3 CC_RT_BLE requires time to accept a new start_notify. Might be the case for other devices also.
             
-    async def requestUsing(self, requestResponseUUID: Union[BaseService, BleakGATTCharacteristic, int, str, UUID], requestCommandUUID: Union[BaseService, BleakGATTCharacteristic, int, str, UUID, None] = None, data: Union[bytearray, None] = None, timeOut: float = 1.0) -> Union[bytearray, None]:
-        """! @brief Requests data from a BLE device using the notification response procedure
+    def requestUsing(self, requestResponseUUID: Union[BaseService, BleakGATTCharacteristic, int, str, UUID], requestCommandUUID: Union[BaseService, BleakGATTCharacteristic, int, str, UUID, None], timeOut: float = 1.0) -> Union[bytearray, None]:
+        """! @brief Configures the command and notification response procedure
              Some BLE devices use a command characeristic. Writing e.g. a read request command coded
              within the data bytearry, specific to the vendor of the device, will force a notification
-             response containing the answer with the requested infromation content, also specifically coded
+             response containing the answer with the requested information content, also specifically coded
              by the vendor.
-             The usual call is
-             @code
-             requestUsing(requestResponseUUID, requestCommandUUID, b'\00')
-             @endcode
-             For easyer and typing error avoiding use the UUIDs can be registered within the object: \n
-             @code
-             requestUsing(requestResponseUUID, requestCommandUUID) \n
-             @endcode
-             After that case the requests can be executed by \n
-             @code
-             request(b'\00')
-             @endcode
+             To execute a response procedure call the method 'request'.
         """
-        #print("-> request")
-        self.requestCommandUUID = requestCommandUUID
-        self.requestTimeOut = timeOut
-        self.requestNotifycationResult = None
         if requestCommandUUID is None or requestResponseUUID is None:
+            raise bleak.exc.BleakError("Method 'requestUsing' called but requestResponse of requestCommand are passed with None.")
+        self.requestCommandUUID = requestCommandUUID
+        self.requestResponseUUID = requestResponseUUID
+        self.requestTimeOut = timeOut
+        return
+
+    async def request(self, data: Union[bytearray, None] = None, timeOut: float = 1.0) -> Union[bytearray, None]:
+        """! @brief Requesting a read or write operation of a GATT characteristic using a GATT command characteristic
+            This method uses a notification answer (response) of the BLE device for reading initiated by the write to the command characteristic.
+            The method 'requestUsing' must be called at least once in order to set the request command and response characteristic
+            Fore derived classes the COMMAND and RESONSE characteristics should be defined within the 'RequestService' enumeration.
+        """
+        if self.requestCommandUUID is None or self.requestResponseUUID is None:
             await self.__stopResponseNotification__()
-            return       
-        await self.__startResponseNotification__(requestResponseUUID)
+            raise bleak.exc.BleakError("Method 'request' called but requestCommandUUID or requestResponseUUID are undefined. Use method 'requestUsing' once in advance.")
         if data is None:
-            return
-        #print("-> write request")
+            raise bleak.exc.BleakError("Method 'request' called but no command data is passed.")
+        self.requestNotifycationResult = None
+        await self.__startResponseNotification__(self.requestResponseUUID)
         uid = self.requestCommandUUID
         if isinstance(uid, BaseService):
             uid = uid.value.uuid
@@ -309,16 +312,6 @@ class ExtBleakClient(BleakClient, GATT_Dict):
         if (timeOutCnt==0):
             raise bleak.exc.BleakError("Request procedure failed with time out of {}s while waiting for the notification response!".format(timeOut))
         return self.requestNotifycationResult
-
-    async def request(self, data: Union[bytearray, None] = None, timeOut: float = 1.0) -> Union[bytearray, None]:
-        """! @ Short call to request data by using the command response mechanism
-            This method can be used in case a previous call to \ref requestUsing has already defined the
-            corresponding command and response characteristics. Derived client classes usually do that within
-            their constructor.
-        """
-        if self.requestCommandUUID is None or self.requestResponseUUID is None:
-            raise bleak.exc.BleakError("Method 'request' called but requestCommandUUID or requestResponseUUID are undefined.")
-        return await self.requestUsing(self.requestResponseUUID, self.requestCommandUUID, data, timeOut)
 
     def printServices(self, readValues: bool = False):
         """! @brief Prints all content provided from the GATT server device

@@ -91,8 +91,10 @@ class CharacteristicType:
         
     def to_bytearray(self, value: Union[bytearray, str, int]) -> bytearray:
         """! @brief Converts a value of the type this instance specifies to the according bytearry """
+        if isinstance(value, bytes):
+            value = bytearray(value)
         if not isinstance(value, self.type):
-            raise ValueError(f"Parameter 'value' requires type {repr(str)} !")
+            raise ValueError(f"Parameter 'value' requires type {repr(self.type)} !")
         if self.type is not bytearray and self.size <= 0:
             raise ValueError("The instance specifies a read only characteristc (size=0)! Conversion is not possible.")
         res = None
@@ -142,7 +144,7 @@ class BaseService(Enum):
         """! @brief Deliveres a string representing the content of this enumeration in a readable format """
         #r = repr(cls)
         #return "<{0} {1}>".format(r[1:len(r)-1], cls.characteristics())
-        return "<enum '{0}.{1}' {2}>".format(__class__.__module__, cls.__name__, cls.characteristics())
+        return "<enum '{0}.{1}' {2}>".format(cls.__module__, cls.__name__, cls.characteristics())
 
     @classmethod
     def fromUUID(cls, uuid:str):
@@ -169,4 +171,3 @@ class ClassServices(dict):
             ret = ret + " '{0}':{1}\n".format(key, value.toString())
         ret = ret + "}>"
         return ret
-

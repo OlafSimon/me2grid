@@ -22,9 +22,11 @@ from bleak.backends.characteristic import BleakGATTCharacteristic
 
 try: # Necessary, to run this file directly
     from gatt import BaseService
+    from gatt_services import DeviceInformationService
     from ExtBleakClient import ExtBleakClient, GATT_Dict
 except:
     from me2grid.easybleak.gatt import BaseService
+    from me2grid.easybleak.gatt_services import DeviceInformationService
     from me2grid.easybleak.ExtBleakClient import ExtBleakClient, GATT_Dict
 
 def syncCall(func):    
@@ -113,6 +115,7 @@ class EasyBleakClient(GATT_Dict):
              is time consuming as the remote device is scanned for services and characteristics.
         """
         self._continuousConnect = True;
+        # print("-> Easy connect")
         self._checkConnect_()
         self._checkDisconnect_()
         
@@ -132,7 +135,7 @@ class EasyBleakClient(GATT_Dict):
         # Check for the connection status
         if not self._bleakClient.is_connected:
             try:
-                #print("-> connect")
+                #print("-> Easy _check_ connect")
                 self._loop.run_until_complete(self._bleakClient.connect())
             except bleak.exc.BleakError as e:
                 asyncio.set_event_loop(self.__globalLoop)
@@ -154,7 +157,7 @@ class EasyBleakClient(GATT_Dict):
     # ExtBleakClient interface
     
     @syncCall
-    async def read(self, uuid: Union[BaseService, BleakGATTCharacteristic, int, str, UUID]) -> Union[bytearray, str, int]:            
+    async def read(self, uuid: Union[BaseService, BleakGATTCharacteristic, int, str, UUID] = DeviceInformationService.MODEL) -> Union[bytearray, str, int]:            
         """! @brief Reads from a GATT characteristic """
         return await self._bleakClient.read(uuid)
         
@@ -163,23 +166,25 @@ class EasyBleakClient(GATT_Dict):
         """! @brief Writes to a GATT characteristic  """
         await self._bleakClient.write(uuid, data)
 
-    @syncCall
-    async def requestUsing(self, requestResponseUUID: Union[BaseService, BleakGATTCharacteristic, int, str, UUID], requestCommandUUID: Union[BaseService, BleakGATTCharacteristic, int, str, UUID, None] = None, data: Union[bytearray, None] = None, timeOut: float = 1.0) -> bytearray:            
-        """! @brief Requesting a read or write operation of a GATT characteristic using a GATT command characteristic
-            This method uses a notification answer (response) of the BLE device for reading initiated by the write to the command characteristic.
-            The command and response characteristics should be defined within the 'RequestService' enumeration of the derived class of
-            'EasyBleak'
+    def requestUsing(self, requestResponseUUID: Union[BaseService, BleakGATTCharacteristic, int, str, UUID], requestCommandUUID: Union[BaseService, BleakGATTCharacteristic, int, str, UUID], timeOut: float = 1.0):            
+        """! @brief Configures the command and notification response procedure
+             Some BLE devices use a command characeristic. Writing e.g. a read request command coded
+             within the data bytearry, specific to the vendor of the device, will force a notification
+             response containing the answer with the requested information content, also specifically coded
+             by the vendor.
+             To execute a response procedure call the method 'request'.
         """
-        await self._bleakClient.requestUsing(requestResponseUUID, requestCommandUUID, data, timeOut)
+        self._bleakClient.requestUsing(requestResponseUUID, requestCommandUUID, timeOut)
 
     @syncCall
-    async def request(self, data: Union[bytearray, None] = None, timeOut: float = 1.0) -> bytearray:
-        """! @ Short call to request data by using the command response mechanism
-            This method can be used in case a previous call to \ref requestUsing has already defined the
-            corresponding command and response characteristics. Derived client classes usually do that within
-            their constructor.
+    async def request(self, data: Union[bytearray, None] = None, timeOut: float = 1.0) -> bytearray:           
+        """! @brief Requesting a read or write operation of a GATT characteristic using a GATT command characteristic
+            This method uses a notification answer (response) of the BLE device for reading initiated by the write to the command characteristic.
+            The method 'requestUsing' must be called at least once in order to set the request command and response characteristic
+            Fore derived classes the COMMAND and RESONSE characteristics should be defined within the 'RequestService' enumeration.
         """
-        return await self._bleakClient.request(data, timeOut)
+        res = await self._bleakClient.request(data, timeOut)
+        return res
 
     @syncCall
     async def __sleep__(self, time: float=0):
@@ -278,8 +283,6 @@ class EasyBleakClient(GATT_Dict):
 if __name__ == '__main__':
     
     from gatt_services import DeviceInformationService
-    charUUID_ReadWriteRequest  = "3fa4585a-ce4a-3bad-db4b-b8df8179ea09" # handle 0x0411
-    charUUID_ReadWriteResponse = "d0e8434d-cd29-0996-af41-6c90f4e0eb2a" # handle 0x0421
 
     print("EasyBleakClient")
 
@@ -288,6 +291,9 @@ if __name__ == '__main__':
 
     # sample program for 'request' to be used at the EQ3 CC_RT_BLE valve device
     def TestRequest():
+        charUUID_ReadWriteRequest  = "3fa4585a-ce4a-3bad-db4b-b8df8179ea09" # handle 0x0411
+        charUUID_ReadWriteResponse = "d0e8434d-cd29-0996-af41-6c90f4e0eb2a" # handle 0x0421
+        charUUID_Notification      = "00002a29-0000-1000-8000-00805f9b34fb" # handle 0x0311                 
         print("Use of 'request' at an EQ3 CC_RT_BLE valve device")
         print("Connecting")
         eq.connect()

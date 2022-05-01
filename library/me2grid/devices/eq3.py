@@ -29,32 +29,55 @@ print (temp_dict)
 
 """
 
-# import asyncio
 import binascii
-import math
-import bleak
 
 from enum import IntEnum
-from typing import Union
-from uuid import UUID
-from bleak.backends.characteristic import BleakGATTCharacteristic
 from datetime import datetime, timedelta
-from EasyBleakClient import EasyBleakClient
+
+try: # Necessary, to run this file directly
+    from .easybleak.EasyBleakClient import EasyBleakClient
+    from .easybleak.ExtBleakClient import BaseService, CharacteristicType
+    from .easybleak.gatt import BLE_UUID, ClassServices
+    from .BibPy.mathlib.Vector3 import Vector3
+except:
+    from me2grid.easybleak.EasyBleakClient import EasyBleakClient
+    from me2grid.easybleak.ExtBleakClient import BaseService, CharacteristicType
+    from me2grid.easybleak.gatt import BLE_UUID, ClassServices
+    from me2grid.BibPy.mathlib.Vector3 import Vector3
+
+
+class RequestService(BaseService):
+    """! @brief Service enumeration of command response data exchange
+        Hint: The BLE characteristic 0x2902 (Client Characteristic Control Descriptor) will be automatically written by the BleakClient!
+    """
+    COMMAND  = CharacteristicType("3fa4585a-ce4a-3bad-db4b-b8df8179ea09") # handle 0x0411
+    RESPONSE = CharacteristicType("d0e8434d-cd29-0996-af41-6c90f4e0eb2a") # handle 0x0421
+    # charUUID_Notification      = "00002a29-0000-1000-8000-00805f9b34fb" # handle 0x0311                 
+
+    @classmethod
+    def uuidService(cls) -> str:
+        return "3e135142-654f-9090-134a-a6ff5bb77046"
+
+class UnknownService(BaseService):
+    """! @brief Service enumeration of characteristics within the 'Optical Sensor Service'
+        Hint: The BLE characteristic 0x2902 (Client Characteristic Control Descriptor) will be automatically written by the BleakClient!
+    """
+    CHAR0 = CharacteristicType("e3dd50bf-f7a7-4e99-838e-570a086c666b")
+    CHAR1 = CharacteristicType("92e86c7a-d961-4091-b74f-2409e72efe36")
+    CHAR2 = CharacteristicType("347f7608-2e2d-47eb-913b-75d4edc4de3b")
+
+    @classmethod
+    def uuidService(cls) -> str:
+        return "9e5d1e47-5c13-43a0-8635-82ad38a1386f"
+
+cc_rt_ble_Services = ClassServices({"RequestService": RequestService, "UnknownService": UnknownService})
 
 class CC_RT_BLE(EasyBleakClient):
     """! @brief Bluetooth client for the EQ3 valve """
-    
-    charUUID_ReadWriteRequest  = "3fa4585a-ce4a-3bad-db4b-b8df8179ea09" # handle 0x0411
-    charUUID_ReadWriteResponse = "d0e8434d-cd29-0996-af41-6c90f4e0eb2a" # handle 0x0421
-    #handle: 0x0110, char properties: 0x02, char value handle: 0x0111, uuid: 00002a00-0000-1000-8000-00805f9b34fb
-    #handle: 0x0120, char properties: 0x02, char value handle: 0x0121, uuid: 00002a01-0000-1000-8000-00805f9b34fb
-    #handle: 0x0130, char properties: 0x02, char value handle: 0x0131, uuid: 00002a02-0000-1000-8000-00805f9b34fb
-    #handle: 0x0140, char properties: 0x08, char value handle: 0x0141, uuid: 00002a03-0000-1000-8000-00805f9b34fb
-    #handle: 0x0150, char properties: 0x02, char value handle: 0x0151, uuid: 00002a04-0000-1000-8000-00805f9b34fb
-    #handle: 0xff01, char properties: 0x38, char value handle: 0xff02, uuid: e3dd50bf-f7a7-4e99-838e-570a086c666b
-    #handle: 0xff04, char properties: 0x08, char value handle: 0xff05, uuid: 92e86c7a-d961-4091-b74f-2409e72efe36
-    #handle: 0xff06, char properties: 0x02, char value handle: 0xff07, uuid: 347f7608-2e2d-47eb-913b-75d4edc4de3b
+    __services__ : ClassServices = EasyBleakClient.createAppendedServices(cc_rt_ble_Services)
 
+    offTemperature = 4.5
+    
     class Mode(IntEnum):
         INVALID = 0xFF
         AUTO = 0xFE
@@ -79,14 +102,41 @@ class CC_RT_BLE(EasyBleakClient):
         
     def __init__(self, mac):
         super().__init__(mac)
-        self.requestNotifycationResult = None
+        self.requestUsing(RequestService.RESPONSE, RequestService.COMMAND)   # avoiding a _checkConnect_ from @asyncCall
+        # Memorized values from readings
         self.modes = []
         self.targetTemperature = None
         self.setting = None
-        self.isOpenWindow = False
-        self.openWindowPreviousAutomatic = False
-        self.openWindowPreviousTemperature = 18
-        self.openWindowTemperature = 8;
+        # ConfiguredConstants
+        self.openWindowTemperature = self.offTemperature
+        
+    def disconnect(self):
+        """! brief Disconnect with exception handling
+            The valve does automatically disconnect after a certain time (some minutes) of BLE communication inactivity. This disconnect
+            is not noticed by the bleak-client. As an exception is thrown in case of calling stop_notification or disconnect at a disconnected
+            device such exceptions can be treated as being accepted during normal operation.
+        """
+        try:
+            super().disconnect()
+        except:
+            pass
+        
+    def request(self, data: bytearray) -> bytearray:
+        """! brief Spezialised 'request' method for the eq3 providing recovery from response time out
+            Under some not exactly known conditions, the EQ3 enters a state where request commands will not be answered. This state is entered
+            only if the device is in manual mode. Although not delivering a reply, the device does read and execute incoming commands correctly.
+            To exit this state it is necessary to switch the device to automatic mode either by a command or manually.  \n
+            In case the first request initiated by this method fails, the device will be switched to automatic mode and the previous failed request
+            will be repeated. In case the second request fails again the corresponding exception will be thrown.\n
+            (It has been observed, the serial number plate request b'\x00' is answered in all condtiontions.)\n
+            Some known conditions for outstanding responses are: Switching to manual mode by BLE command. Recovering is possible, if a automatic mode
+            is send. There is no issue in case you switch to manual mode manually with the device keys. In case the device is set to vacation mode
+            manually. 
+        """
+        try:
+            return super().request(data)
+        except Exception as e:
+            return None
         
     def decodeModes(self, data: int):
         modes = []
@@ -106,46 +156,16 @@ class CC_RT_BLE(EasyBleakClient):
             modes.append(self.Mode.LOWBATTERY)              
         return modes
 
-#     def _request_notification_handler_(self, sender, data):
-#         """Simple notification handler which stores the data received."""
-#         self.requestNotifycationResult = data
-#         print("EQ3 _request_notification_handler_ from {0}: {1}".format(sender, data))
-#         
-#     def request(self, charUUID_NotificationResponse: Union[BleakGATTCharacteristic, int, str, UUID], charUUID_NotificationRequest: Union[BleakGATTCharacteristic, int, str, UUID], data: bytearray, timeOut: float = 1.0) -> Union[bytearray, None]:
-#         """! @brief Requests data from a BLE device using the notification response procedure
-#              Some BLE devices use a command characeristic. Writing e.g. a read request command coded
-#              within the data bytearry, specific to the vendor of the device, will force a notification
-#              response containing the answer with the requested infromation content, also specifically coded
-#              by the vendor.
-#         """
-#         print("-> EQ Special request")
-#         self.requestNotifycationResult = None
-#         done = False
-#         while not done:
-#             try:
-#                 self.start_notify(charUUID_NotificationResponse, self._request_notification_handler_)
-#                 self.write(charUUID_NotificationRequest, data)
-#                 done = True
-#             except Exception as e:
-#                 if not done:
-#                     # Sometimes, especially in case there hasn't been communication for longer time (few minutes),
-#                     # the EQ3 hangs up and refuses sending notifications any more. It disconnects with receiving the 'start_notify' command.
-#                     # Just reconnecting doesn't help. An additional single write command is necessary to bring the EQ3 back to normal operation. 
-#                     print("-> Running refused notifications workaround")
-#                     self.connect()
-#                     self.write(charUUID_NotificationRequest, b'\x00')
-#                     done = True # don't run the exception handling a second time
-#                 else:
-#                     raise e
-#         timeOutCnt = timeOut*10
-#         while timeOutCnt>0 and self.requestNotifycationResult==None:
-#             print("-> Check time out")
-#             timeOutCnt = timeOutCnt - 1
-#             self.getNotifications(0.1)
-#         self.stop_notify(charUUID_NotificationResponse)
-#         if (timeOutCnt==0):
-#             raise bleak.exc.BleakError("Request procedure failed with time out of {}s while waiting for the notification response!".format(timeOut))
-#         return self.requestNotifycationResult
+    def readSerialNumber(self) -> str:
+        """ \brief Sets the time of the valve from a given datetime object
+            If no time is given as an argument the current time is used.
+        """
+        data = bytearray(b'\x00')
+        #data[0] = 0
+        ans = self.request(data)
+        print(ans)
+        asc = bytearray([d-0x30 for d in ans[4:14]])
+        return asc.decode("utf-8")
 
     def writeTime(self, time = None):
         """ \brief Sets the time of the valve from a given datetime object
@@ -163,7 +183,7 @@ class CC_RT_BLE(EasyBleakClient):
         data[5] = time.minute
         data[6] = time.second
 
-        result = self.request(self.charUUID_ReadWriteResponse, self.charUUID_ReadWriteRequest, data)
+        result = self.request(data)
         
         if result is not None and len(result) >= 5:
             self.modes = self.decodeModes(result[2])
@@ -175,8 +195,7 @@ class CC_RT_BLE(EasyBleakClient):
     def readTargetTemperature(self):
         """! @brief Retreives the currently active target temperature value within °C
         """
-        result = self.request(self.charUUID_ReadWriteResponse, self.charUUID_ReadWriteRequest, b'\x03')
-        
+        result = self.request(b'\x03')
         #print("Get temperature: ", binascii.hexlify(result))
 
         if result is not None and len(result) >= 5:
@@ -191,15 +210,15 @@ class CC_RT_BLE(EasyBleakClient):
         """
         result = None
         if temperature == 'comfort':
-            result = self.request(self.charUUID_ReadWriteResponse, self.charUUID_ReadWriteRequest, b'\x43')
+            result = self.request(b'\x43')
         elif temperature == 'eco':
-            self.request(self.charUUID_ReadWriteResponse, self.charUUID_ReadWriteRequest, b'\x44')
+            self.request(b'\x44')
         else:
             if type(temperature) == str:
                 return None, None
             data = bytearray(b'\x41\x00')
             data[1] = int(temperature*2)           
-            result = self.request(self.charUUID_ReadWriteResponse, self.charUUID_ReadWriteRequest, data)
+            result = self.request(data)
             
         if result is not None and len(result) >= 5:
             modes = self.decodeModes(result[2])
@@ -216,68 +235,41 @@ class CC_RT_BLE(EasyBleakClient):
             return self.modes
         return []
     
-    def writeModes(self, modes, unset: bool = False, setall: bool = False, vacationDate: datetime = None, temperatureVacation = 10, timeOpenWindowMinutes = 30, temperatureOpenWindow = 10):
-        """! @brief Sets a list of operation modes
+    def writeMode(self, mode, vacationDate: datetime = None, temperatureVacation = 10):
+        """! @brief Sets a single or a list of modes
+            It is possible to either set manual mode (CC_RT_BLE.Mode.MANUAL), automatic mode (CC_RT_BLE.Mode.AUTO)
+            or vacation mode (CC_RT_BLE.Mode.VACATION).
         """
-        if type(modes) is not type([]):
-            modes = [modes]
-        try:
-            modes.index(self.Mode.AUTO)
-            if not unset:
-                self.request(self.charUUID_ReadWriteResponse, self.charUUID_ReadWriteRequest, b'\x40\x00')  
-            else:
-                self.request(self.charUUID_ReadWriteResponse, self.charUUID_ReadWriteRequest, b'\x40\x40')              
-        except ValueError:
-            try:
-                modes.index(self.Mode.MANUAL)
-                if not unset:
-                    self.request(self.charUUID_ReadWriteResponse, self.charUUID_ReadWriteRequest, b'\x40\x40')  
-                else:
-                    self.request(self.charUUID_ReadWriteResponse, self.charUUID_ReadWriteRequest, b'\x40\x00')              
-            except ValueError:
-                if setall:
-                    if not unset:
-                        self.request(self.charUUID_ReadWriteResponse, self.charUUID_ReadWriteRequest, b'\x40\x00')              
-                    else:
-                        self.request(self.charUUID_ReadWriteResponse, self.charUUID_ReadWriteRequest, b'\x40\x40')              
-        try:
-            modes.index(self.Mode.VACATION)
-            if not unset and date is not None:
-                data = b'\x40\x00\x00\x00\x00\x00'
-                data[1] = byte(temperature*2+128)
-                data[2] = byte(vacationDate.day)
-                data[3] = byte(vacationDate.year%100)
-                data[4] = byte(vacationDate.hour*2)
-                data[5] = byte(vacationDate.month)
-                self.request(self.charUUID_ReadWriteResponse, self.charUUID_ReadWriteRequest, data)
-        except ValueError:
-            pass
-        data = None
-        try:
-            modes.index(self.Mode.OPENWINDOW)
-            print('OpenWindow mode')
-            data = bytearray(b'\x14\x00\x00')
-            if not unset:
-                data[1] = int(temperatureOpenWindow * 2)
-                data[2] = int(timeOpenWindowMinutes / 5)
-            else: 
-                data[1] = int(temperatureOpenWindow * 2)
-                data[2] = 0
-        except:
-            if setall:
-                data = bytearray(b'\x14\x00\x00')
-                if not unset:
-                    data[1] = int(temperatureOpenWindow * 2)
-                    data[2] = int(timeOpenWindowMinutes / 5)
-                else: 
-                    data[1] = int(temperatureOpenWindow * 2)
-                    data[2] = 0
-        if data is not None:
-            res = self.request(self.charUUID_ReadWriteResponse, self.charUUID_ReadWriteRequest, data)
-            #if res is not None:
-            #    print(binascii.hexlify(res))
-            #else:
-            #    print(res)
+        if mode is self.Mode.MANUAL:
+            self.request(b'\x40\x40')              
+        elif mode is self.Mode.VACATION and date is not None:
+            data = b'\x40\x00\x00\x00\x00\x00'
+            data[1] = byte(temperature*2+128)
+            data[2] = byte(vacationDate.day)
+            data[3] = byte(vacationDate.year%100)
+            data[4] = byte(vacationDate.hour*2)
+            data[5] = byte(vacationDate.month)
+            self.request(data)
+        elif mode is self.Mode.AUTO:
+            self.request(b'\x40\x00')
+        else:
+            raise ValueError("Requested Mode cannot be written.")
+
+    def writeConfigurationOpenWindow(self, timeOpenWindowMinutes = 15, temperatureOpenWindow = 5):
+        """! brief Configures the automatic open window detection
+            In case of a rapid temperature decrease the valve switches to the open window mode automatically. It is not possible doing so
+            manually or by BLE command! It is only possible to configure how long the mode should be entered at what minimum temperature should be
+            hold during this time. This configuration can be done using this method.
+        """
+        data = bytearray(b'\x14\x00\x00')
+        data[1] = int(temperatureOpenWindow * 2)
+        data[2] = int(timeOpenWindowMinutes / 5)
+        self.request(data)
+        #if res is not None:
+        #    print(binascii.hexlify(res))
+        #else:
+        #    print(res)
+        return
                 
     def writeTimer(self, day, list):
         """! @brief Sets the timer values for automatic mode for a single day of the week.
@@ -296,13 +288,13 @@ class CC_RT_BLE(EasyBleakClient):
         for t in list:
             #print(t)
             if i is 8:
-                print ('Error: List is too long')
+                #raise ValueError('List is too long')
                 break;
             time = datetime.strptime(t, timeFormat) - datetime.strptime('00:00', timeFormat)
             minutes = time.seconds // 60
             #print(minutes)
             if i is 0 and minutes is not 0:
-                print ('Error: First time is not 00:00. Time is changed to 00:00')
+                #print ('Error: First time is not 00:00. Time is changed to 00:00')
                 minutes = 0
             if i is 0:
                 data[2 * i + 2]=list[t]*2
@@ -317,7 +309,7 @@ class CC_RT_BLE(EasyBleakClient):
             
         #print(binascii.hexlify(data))
 
-        result = self.request(self.charUUID_ReadWriteResponse, self.charUUID_ReadWriteRequest, data)
+        result = self.request(data)
             
         #print(binascii.hexlify(result))
         return
@@ -331,7 +323,7 @@ class CC_RT_BLE(EasyBleakClient):
         data = bytearray(b'\x20\x00')
         data[1] = day           
         
-        result = self.request(self.charUUID_ReadWriteResponse, self.charUUID_ReadWriteRequest, data)    
+        result = self.request(data)    
         #print(binascii.hexlify(result))
         
         timeFormat = '%H:%M'
@@ -362,47 +354,36 @@ class CC_RT_BLE(EasyBleakClient):
         except:
             return False
             
-    def writeOpenWindow(self, on: bool):
+    def writeOpenWindow(self, on: bool = True, openWindowTemperature: float = None):
         """ Sets the valve into open window mode by bluetooth.
             As the valve internal open window mode can not be activated
             through bluetooth this method stores the active mode, enters
             manual mode and sets the temperature to a low value.
         """
-        if on and not self.isOpenWindow:
-            print("Writing open window\nReading temperature and modes")
-            self.readTargetTemperature()
-            if self.isMode(self.Mode.AUTO):
-                self.isOpenWindow = True
-                self.openWindowPreviousAutomatic = True
-                print("Writing manual mode")
-                self.writeModes(self.Mode.MANUAL)
-            else:
-                self.isOpenWindow = True
-                self.openWindowPreviousAutomatic = False
-                self.openWindowPreviousTemperature = self.targetTemperature
-            print("Writing open window temperature")
+        if openWindowTemperature is not None:
+            self.openWindowTemperature = openWindowTemperature
+        if on:
+            self.writeMode(self.Mode.MANUAL)
             self.writeTargetTemperature(self.openWindowTemperature)
-        if not on and self.isOpenWindow:                
-            print("Writing to unsett open window")
-            self.isOpenWindow=False
-            if self.openWindowPreviousAutomatic:
-                print("Writing to reset to automatic mode")
-                self.writeModes(self.Mode.AUTO)
-            else:
-                print("Writing to reset to room temperature")
-                self.writeTargetTemperature(self.openWindowPreviousTemperature)
-        print("OpenWindow ready")
+        else:
+            self.writeMode(self.Mode.AUTO)
         return
 
-if __name__ == '__main__':
+def programGettingStarted():
+    from me2grid.devices.eq3 import CC_RT_BLE
 
-    valve = EQ3_CC_RT_BLE_EQ("00:1A:22:12:0F:87")
+    valve = CC_RT_BLE("00:1A:22:12:0F:87")
     print("Connecting")
     valve.connect()
     print("Reading values")
     valve.readModes()
     print(valve.modes)
+    print("Temperature target value:")
     print(str(valve.readTargetTemperature()) + " °C")
     print("Disconnecting")
     valve.disconnect()
     print("Ready")
+  
+if __name__ == '__main__':
+
+    programGettingStarted()
